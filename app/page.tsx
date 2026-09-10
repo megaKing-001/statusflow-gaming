@@ -33,6 +33,15 @@ export default function HomePage() {
       badge: 'Instant Win',
       href: '/games/statuswheel',
     },
+    {
+  slug: 'statuscards',
+  title: 'StatusCards',
+  description: 'Predict whether the next drawn card is higher or lower to win SFP.',
+  icon: Sparkles,
+  color: 'border-emerald-500/30 text-emerald-400',
+  badge: 'Card Draw',
+  href: '/games/statuscards',
+    }
   ];
 
   return (
