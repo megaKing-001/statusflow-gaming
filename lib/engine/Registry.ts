@@ -1,10 +1,10 @@
-// lib/engine/Registry.ts
 import { StatusQuizEngine } from './games/StatusQuizEngine';
+import { StatusCrashEngine } from './games/StatusCrashEngine';
 
 const registry = new Map<string, any>();
 
-// Register StatusQuiz Engine
 registry.set('statusquiz', new StatusQuizEngine());
+registry.set('statuscrash', new StatusCrashEngine());
 
 export function getGameEngine(slug: string) {
   const engine = registry.get(slug);
