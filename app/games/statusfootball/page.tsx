@@ -24,16 +24,17 @@ export default async function StatusFootballPage() {
     .eq('user_id', user.id)
     .single();
 
-  // Fetch Recent Matches
+  // Fetch Recent Matches (Both hosted and joined PvP matches)
   const { data: matches } = await supabase
     .from('football_matches')
     .select('*')
-    .eq('host_user_id', user.id)
+    .or(`host_user_id.eq.${user.id},opponent_user_id.eq.${user.id}`)
     .order('created_at', { ascending: false })
     .limit(5);
 
   return (
     <FootballClient 
+      currentUserId={user.id}
       initialBalance={wallet?.sfp_balance || 0} 
       recentMatches={matches || []} 
     />
