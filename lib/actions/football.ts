@@ -1,13 +1,21 @@
-// lib/actions/football.ts
-'server';
+'use server';
 
 import { createClient } from '@/lib/supabase/server';
+import { createServiceClient } from '@/lib/supabase/service';
 import { revalidatePath } from 'next/cache';
-import { 
-  PenaltyZone, 
-  resolvePenaltyShot, 
-  resolveAIMatch 
+import {
+  PenaltyZone,
+  resolvePenaltyShot,
+  resolveAIMatch,
 } from '@/lib/engine/games/StatusFootballEngine';
+
+function friendlyError(error: { message: string } | null): string {
+  if (!error) return 'Something went wrong. Please try again.';
+  if (error.message.includes('insufficient balance')) return 'Insufficient SFP balance';
+  if (error.message.includes('no wallet_accounts row')) return 'Wallet not found';
+  console.error('football.ts RPC error:', error.message);
+  return 'Something went wrong. Please try again.';
+}
 
 // --- Penalty Shootout Action ---
 export async function playPenaltyShootout(wagerSFP: number, targetZone: PenaltyZone) {
@@ -17,54 +25,25 @@ export async function playPenaltyShootout(wagerSFP: number, targetZone: PenaltyZ
 
   if (wagerSFP <= 0) return { success: false, error: 'Enter a valid wager' };
 
-  // 1. Fetch wallet & verify balance
-  const { data: wallet } = await supabase
-    .from('wallet_accounts')
-    .select('sfp_balance')
-    .eq('user_id', user.id)
-    .single();
-
-  if (!wallet || wallet.sfp_balance < wagerSFP) {
-    return { success: false, error: 'Insufficient SFP balance' };
-  }
-
-  // 2. Deduct initial wager
-  await supabase
-    .from('wallet_accounts')
-    .update({ sfp_balance: wallet.sfp_balance - wagerSFP })
-    .eq('user_id', user.id);
-
-  // 3. Resolve outcome via Engine
+  // Outcome resolved server-side, before touching the wallet — the browser
+  // never sees or influences this calculation.
   const outcome = resolvePenaltyShot(targetZone);
   const payout = Math.floor(wagerSFP * outcome.payoutMultiplier);
 
-  // 4. Credit payout if won
-  if (payout > 0) {
-    const { data: currentWallet } = await supabase
-      .from('wallet_accounts')
-      .select('sfp_balance')
-      .eq('user_id', user.id)
-      .single();
+  const admin = createServiceClient();
+  const { data, error } = await admin
+    .rpc('play_football_solo_wager', {
+      p_user_id: user.id,
+      p_match_type: 'penalty',
+      p_wager_sfp: wagerSFP,
+      p_payout_sfp: payout,
+      p_host_score: outcome.isGoal ? 1 : 0,
+      p_opponent_score: outcome.isGoal ? 0 : 1,
+      p_idempotency_key: crypto.randomUUID(),
+    })
+    .single();
 
-    if (currentWallet) {
-      await supabase
-        .from('wallet_accounts')
-        .update({ sfp_balance: currentWallet.sfp_balance + payout })
-        .eq('user_id', user.id);
-    }
-  }
-
-  // 5. Record match in database
-  await supabase.from('football_matches').insert({
-    host_user_id: user.id,
-    match_type: 'penalty',
-    stake_sfp: wagerSFP,
-    payout_sfp: payout,
-    host_score: outcome.isGoal ? 1 : 0,
-    opponent_score: outcome.isGoal ? 0 : 1,
-    status: 'completed',
-    winner_user_id: outcome.isGoal ? user.id : null,
-  });
+  if (error || !data) return { success: false, error: friendlyError(error) };
 
   revalidatePath('/games/statusfootball');
 
@@ -73,10 +52,11 @@ export async function playPenaltyShootout(wagerSFP: number, targetZone: PenaltyZ
     outcome,
     payout,
     profit: payout - wagerSFP,
+    newBalance: data.new_balance,
   };
 }
 
-// --- Match Wager Action ---
+// --- AI Match Wager Action ---
 export async function playAIMatch(wagerSFP: number, difficulty: 'easy' | 'medium' | 'hard') {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -84,54 +64,23 @@ export async function playAIMatch(wagerSFP: number, difficulty: 'easy' | 'medium
 
   if (wagerSFP <= 0) return { success: false, error: 'Enter a valid wager' };
 
-  // 1. Fetch wallet & verify balance
-  const { data: wallet } = await supabase
-    .from('wallet_accounts')
-    .select('sfp_balance')
-    .eq('user_id', user.id)
-    .single();
-
-  if (!wallet || wallet.sfp_balance < wagerSFP) {
-    return { success: false, error: 'Insufficient SFP balance' };
-  }
-
-  // 2. Deduct initial wager
-  await supabase
-    .from('wallet_accounts')
-    .update({ sfp_balance: wallet.sfp_balance - wagerSFP })
-    .eq('user_id', user.id);
-
-  // 3. Resolve outcome via Engine
   const outcome = resolveAIMatch(difficulty);
   const payout = Math.floor(wagerSFP * outcome.multiplier);
 
-  // 4. Credit payout if won/draw refund
-  if (payout > 0) {
-    const { data: currentWallet } = await supabase
-      .from('wallet_accounts')
-      .select('sfp_balance')
-      .eq('user_id', user.id)
-      .single();
+  const admin = createServiceClient();
+  const { data, error } = await admin
+    .rpc('play_football_solo_wager', {
+      p_user_id: user.id,
+      p_match_type: 'ai_wager',
+      p_wager_sfp: wagerSFP,
+      p_payout_sfp: payout,
+      p_host_score: outcome.userGoals,
+      p_opponent_score: outcome.aiGoals,
+      p_idempotency_key: crypto.randomUUID(),
+    })
+    .single();
 
-    if (currentWallet) {
-      await supabase
-        .from('wallet_accounts')
-        .update({ sfp_balance: currentWallet.sfp_balance + payout })
-        .eq('user_id', user.id);
-    }
-  }
-
-  // 5. Record match in database
-  await supabase.from('football_matches').insert({
-    host_user_id: user.id,
-    match_type: 'ai_wager',
-    stake_sfp: wagerSFP,
-    payout_sfp: payout,
-    host_score: outcome.userGoals,
-    opponent_score: outcome.aiGoals,
-    status: 'completed',
-    winner_user_id: outcome.isWin ? user.id : null,
-  });
+  if (error || !data) return { success: false, error: friendlyError(error) };
 
   revalidatePath('/games/statusfootball');
 
@@ -140,5 +89,6 @@ export async function playAIMatch(wagerSFP: number, difficulty: 'easy' | 'medium
     outcome,
     payout,
     profit: payout - wagerSFP,
+    newBalance: data.new_balance,
   };
 }
