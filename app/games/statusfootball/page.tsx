@@ -17,14 +17,12 @@ export default async function StatusFootballPage() {
     );
   }
 
-  // Fetch Wallet Balance
   const { data: wallet } = await supabase
     .from('wallet_accounts')
-    .select('sfp_balance')
+    .select('available_balance')
     .eq('user_id', user.id)
     .single();
 
-  // Fetch Recent Matches (Both hosted and joined PvP matches)
   const { data: matches } = await supabase
     .from('football_matches')
     .select('*')
@@ -33,10 +31,10 @@ export default async function StatusFootballPage() {
     .limit(5);
 
   return (
-    <FootballClient 
+    <FootballClient
       currentUserId={user.id}
-      initialBalance={wallet?.sfp_balance || 0} 
-      recentMatches={matches || []} 
+      initialBalance={wallet?.available_balance || 0}
+      recentMatches={matches || []}
     />
   );
 }
