@@ -1,8 +1,20 @@
-// lib/actions/football-pvp.ts
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
+import { createServiceClient } from '@/lib/supabase/service';
 import { revalidatePath } from 'next/cache';
+
+function friendlyError(error: { message: string } | null): string {
+  if (!error) return 'Something went wrong. Please try again.';
+  if (error.message.includes('insufficient balance')) return 'Insufficient SFP balance';
+  if (error.message.includes('match no longer open')) return 'Lobby is no longer available';
+  if (error.message.includes('match is not pending')) return 'Lobby is no longer available';
+  if (error.message.includes('cannot join your own match')) return 'You cannot play against yourself';
+  if (error.message.includes('match not found')) return 'Lobby not found or already started';
+  if (error.message.includes('no wallet_accounts row')) return 'Wallet not found';
+  console.error('football-pvp.ts RPC error:', error.message);
+  return 'Something went wrong. Please try again.';
+}
 
 // 1. Create a PvP Match Challenge
 export async function createPvPLobby(stakeSFP: number) {
@@ -12,38 +24,19 @@ export async function createPvPLobby(stakeSFP: number) {
 
   if (stakeSFP <= 0) return { success: false, error: 'Enter a valid stake' };
 
-  // Verify and deduct host stake
-  const { data: wallet } = await supabase
-    .from('wallet_accounts')
-    .select('sfp_balance')
-    .eq('user_id', user.id)
-    .single();
-
-  if (!wallet || wallet.sfp_balance < stakeSFP) {
-    return { success: false, error: 'Insufficient SFP balance' };
-  }
-
-  await supabase
-    .from('wallet_accounts')
-    .update({ sfp_balance: wallet.sfp_balance - stakeSFP })
-    .eq('user_id', user.id);
-
-  // Insert pending lobby record
-  const { data: match, error } = await supabase
-    .from('football_matches')
-    .insert({
-      host_user_id: user.id,
-      match_type: 'pvp_wager',
-      stake_sfp: stakeSFP,
-      status: 'pending',
+  const admin = createServiceClient();
+  const { data, error } = await admin
+    .rpc('create_football_match', {
+      p_host_id: user.id,
+      p_stake_sfp: stakeSFP,
+      p_idempotency_key: crypto.randomUUID(),
     })
-    .select()
     .single();
 
-  if (error) return { success: false, error: 'Failed to create lobby' };
+  if (error || !data) return { success: false, error: friendlyError(error) };
 
   revalidatePath('/games/statusfootball');
-  return { success: true, matchId: match.id };
+  return { success: true, matchId: data.match_id, newBalance: data.new_available_balance };
 }
 
 // 2. Accept Challenge and Resolve Match
@@ -52,76 +45,38 @@ export async function acceptAndResolvePvPMatch(matchId: string) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { success: false, error: 'Unauthorized' };
 
-  // Fetch match details
+  // Friendly precondition check only — the RPC re-validates everything
+  // under a row lock regardless, this is just for a faster error message.
   const { data: match } = await supabase
     .from('football_matches')
-    .select('*')
+    .select('host_user_id')
     .eq('id', matchId)
     .single();
 
-  if (!match || match.status !== 'pending') {
-    return { success: false, error: 'Lobby is no longer available' };
-  }
-
-  if (match.host_user_id === user.id) {
+  if (match?.host_user_id === user.id) {
     return { success: false, error: 'You cannot play against yourself' };
   }
 
-  // Verify and deduct opponent stake
-  const { data: wallet } = await supabase
-    .from('wallet_accounts')
-    .select('sfp_balance')
-    .eq('user_id', user.id)
-    .single();
-
-  if (!wallet || wallet.sfp_balance < match.stake_sfp) {
-    return { success: false, error: 'Insufficient SFP balance' };
-  }
-
-  await supabase
-    .from('wallet_accounts')
-    .update({ sfp_balance: wallet.sfp_balance - match.stake_sfp })
-    .eq('user_id', user.id);
-
-  // Resolve server match (Winner Takes All Pot)
+  // Outcome resolved server-side, before settlement — same RNG logic as
+  // before, just now feeding a trusted, atomic, idempotent settlement path.
   const hostScore = Math.floor(Math.random() * 4);
   let opponentScore = Math.floor(Math.random() * 4);
-  
-  // Guarantee a winner for non-draw direct winner takes all
   if (hostScore === opponentScore) {
     opponentScore += 1;
   }
 
-  const isHostWinner = hostScore > opponentScore;
-  const winnerUserId = isHostWinner ? match.host_user_id : user.id;
-  const totalPot = match.stake_sfp * 2;
-
-  // Credit full pot to winner
-  const { data: winnerWallet } = await supabase
-    .from('wallet_accounts')
-    .select('sfp_balance')
-    .eq('user_id', winnerUserId)
+  const admin = createServiceClient();
+  const { data, error } = await admin
+    .rpc('join_and_settle_football_match', {
+      p_match_id: matchId,
+      p_opponent_id: user.id,
+      p_host_score: hostScore,
+      p_opponent_score: opponentScore,
+      p_idempotency_key: crypto.randomUUID(),
+    })
     .single();
 
-  if (winnerWallet) {
-    await supabase
-      .from('wallet_accounts')
-      .update({ sfp_balance: winnerWallet.sfp_balance + totalPot })
-      .eq('user_id', winnerUserId);
-  }
-
-  // Update match status to completed
-  await supabase
-    .from('football_matches')
-    .update({
-      opponent_user_id: user.id,
-      host_score: hostScore,
-      opponent_score: opponentScore,
-      payout_sfp: totalPot,
-      winner_user_id: winnerUserId,
-      status: 'completed',
-    })
-    .eq('id', matchId);
+  if (error || !data) return { success: false, error: friendlyError(error) };
 
   revalidatePath('/games/statusfootball');
 
@@ -129,9 +84,9 @@ export async function acceptAndResolvePvPMatch(matchId: string) {
     success: true,
     hostScore,
     opponentScore,
-    winnerUserId,
-    pot: totalPot,
-    isUserWinner: winnerUserId === user.id,
+    winnerUserId: data.winner_user_id,
+    pot: data.payout_sfp,
+    isUserWinner: data.winner_user_id === user.id,
   };
 }
 
@@ -141,35 +96,17 @@ export async function cancelPvPLobby(matchId: string) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { success: false, error: 'Unauthorized' };
 
-  const { data: match } = await supabase
-    .from('football_matches')
-    .select('*')
-    .eq('id', matchId)
-    .eq('host_user_id', user.id)
-    .eq('status', 'pending')
+  const admin = createServiceClient();
+  const { data, error } = await admin
+    .rpc('cancel_football_match', {
+      p_match_id: matchId,
+      p_host_id: user.id,
+      p_idempotency_key: crypto.randomUUID(),
+    })
     .single();
 
-  if (!match) return { success: false, error: 'Lobby not found or already started' };
-
-  // Refund host SFP
-  const { data: wallet } = await supabase
-    .from('wallet_accounts')
-    .select('sfp_balance')
-    .eq('user_id', user.id)
-    .single();
-
-  if (wallet) {
-    await supabase
-      .from('wallet_accounts')
-      .update({ sfp_balance: wallet.sfp_balance + match.stake_sfp })
-      .eq('user_id', user.id);
-  }
-
-  await supabase
-    .from('football_matches')
-    .update({ status: 'cancelled' })
-    .eq('id', matchId);
+  if (error || !data) return { success: false, error: friendlyError(error) };
 
   revalidatePath('/games/statusfootball');
-  return { success: true };
+  return { success: true, newBalance: data.new_available_balance };
 }
