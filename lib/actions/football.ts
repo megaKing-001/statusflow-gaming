@@ -17,16 +17,13 @@ function friendlyError(error: { message: string } | null): string {
   return 'Something went wrong. Please try again.';
 }
 
-// --- Penalty Shootout Action ---
-export async function playPenaltyShootout(wagerSFP: number, targetZone: PenaltyZone) {
+export async function playPenaltyShootout(wagerSFP: number, targetZone: PenaltyZone, idempotencyKey: string) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { success: false, error: 'Unauthorized' };
 
   if (wagerSFP <= 0) return { success: false, error: 'Enter a valid wager' };
 
-  // Outcome resolved server-side, before touching the wallet — the browser
-  // never sees or influences this calculation.
   const outcome = resolvePenaltyShot(targetZone);
   const payout = Math.floor(wagerSFP * outcome.payoutMultiplier);
 
@@ -39,7 +36,7 @@ export async function playPenaltyShootout(wagerSFP: number, targetZone: PenaltyZ
       p_payout_sfp: payout,
       p_host_score: outcome.isGoal ? 1 : 0,
       p_opponent_score: outcome.isGoal ? 0 : 1,
-      p_idempotency_key: crypto.randomUUID(),
+      p_idempotency_key: idempotencyKey,
     })
     .single();
 
@@ -53,11 +50,11 @@ export async function playPenaltyShootout(wagerSFP: number, targetZone: PenaltyZ
     payout,
     profit: payout - wagerSFP,
     newBalance: data.new_balance,
+    wasDuplicate: data.was_duplicate,
   };
 }
 
-// --- AI Match Wager Action ---
-export async function playAIMatch(wagerSFP: number, difficulty: 'easy' | 'medium' | 'hard') {
+export async function playAIMatch(wagerSFP: number, difficulty: 'easy' | 'medium' | 'hard', idempotencyKey: string) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { success: false, error: 'Unauthorized' };
@@ -76,7 +73,7 @@ export async function playAIMatch(wagerSFP: number, difficulty: 'easy' | 'medium
       p_payout_sfp: payout,
       p_host_score: outcome.userGoals,
       p_opponent_score: outcome.aiGoals,
-      p_idempotency_key: crypto.randomUUID(),
+      p_idempotency_key: idempotencyKey,
     })
     .single();
 
@@ -90,5 +87,6 @@ export async function playAIMatch(wagerSFP: number, difficulty: 'easy' | 'medium
     payout,
     profit: payout - wagerSFP,
     newBalance: data.new_balance,
+    wasDuplicate: data.was_duplicate,
   };
 }
