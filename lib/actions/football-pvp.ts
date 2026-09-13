@@ -17,7 +17,7 @@ function friendlyError(error: { message: string } | null): string {
 }
 
 // 1. Create a PvP Match Challenge
-export async function createPvPLobby(stakeSFP: number) {
+export async function createPvPLobby(stakeSFP: number, idempotencyKey: string) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { success: false, error: 'Unauthorized' };
@@ -29,24 +29,27 @@ export async function createPvPLobby(stakeSFP: number) {
     .rpc('create_football_match', {
       p_host_id: user.id,
       p_stake_sfp: stakeSFP,
-      p_idempotency_key: crypto.randomUUID(),
+      p_idempotency_key: idempotencyKey,
     })
     .single();
 
   if (error || !data) return { success: false, error: friendlyError(error) };
 
   revalidatePath('/games/statusfootball');
-  return { success: true, matchId: data.match_id, newBalance: data.new_available_balance };
+  return {
+    success: true,
+    matchId: data.match_id,
+    newBalance: data.new_available_balance,
+    wasDuplicate: data.was_duplicate,
+  };
 }
 
 // 2. Accept Challenge and Resolve Match
-export async function acceptAndResolvePvPMatch(matchId: string) {
+export async function acceptAndResolvePvPMatch(matchId: string, idempotencyKey: string) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { success: false, error: 'Unauthorized' };
 
-  // Friendly precondition check only — the RPC re-validates everything
-  // under a row lock regardless, this is just for a faster error message.
   const { data: match } = await supabase
     .from('football_matches')
     .select('host_user_id')
@@ -57,8 +60,6 @@ export async function acceptAndResolvePvPMatch(matchId: string) {
     return { success: false, error: 'You cannot play against yourself' };
   }
 
-  // Outcome resolved server-side, before settlement — same RNG logic as
-  // before, just now feeding a trusted, atomic, idempotent settlement path.
   const hostScore = Math.floor(Math.random() * 4);
   let opponentScore = Math.floor(Math.random() * 4);
   if (hostScore === opponentScore) {
@@ -72,7 +73,7 @@ export async function acceptAndResolvePvPMatch(matchId: string) {
       p_opponent_id: user.id,
       p_host_score: hostScore,
       p_opponent_score: opponentScore,
-      p_idempotency_key: crypto.randomUUID(),
+      p_idempotency_key: idempotencyKey,
     })
     .single();
 
@@ -87,11 +88,12 @@ export async function acceptAndResolvePvPMatch(matchId: string) {
     winnerUserId: data.winner_user_id,
     pot: data.payout_sfp,
     isUserWinner: data.winner_user_id === user.id,
+    wasDuplicate: data.was_duplicate,
   };
 }
 
 // 3. Cancel Open Lobby (Refund Host)
-export async function cancelPvPLobby(matchId: string) {
+export async function cancelPvPLobby(matchId: string, idempotencyKey: string) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { success: false, error: 'Unauthorized' };
@@ -101,12 +103,12 @@ export async function cancelPvPLobby(matchId: string) {
     .rpc('cancel_football_match', {
       p_match_id: matchId,
       p_host_id: user.id,
-      p_idempotency_key: crypto.randomUUID(),
+      p_idempotency_key: idempotencyKey,
     })
     .single();
 
   if (error || !data) return { success: false, error: friendlyError(error) };
 
   revalidatePath('/games/statusfootball');
-  return { success: true, newBalance: data.new_available_balance };
+  return { success: true, newBalance: data.new_available_balance, wasDuplicate: data.was_duplicate };
 }
