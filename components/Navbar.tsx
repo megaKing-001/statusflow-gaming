@@ -5,19 +5,20 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
-import { 
-  Trophy, 
-  Gamepad2, 
-  Gift, 
-  ShoppingBag, 
-  Zap, 
-  Menu, 
-  X, 
-  Coins, 
+import {
+  Trophy,
+  Gamepad2,
+  Gift,
+  ShoppingBag,
+  Zap,
+  Menu,
+  X,
+  Coins,
   ChevronDown,
   HelpCircle,
   RotateCw,
-  Sparkles
+  Sparkles,
+  Swords
 } from 'lucide-react';
 
 export function Navbar() {
@@ -28,33 +29,31 @@ export function Navbar() {
   const supabase = createClient();
 
   useEffect(() => {
-    // 1. Fetch initial wallet balance
     const fetchBalance = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
       const { data } = await supabase
         .from('wallet_accounts')
-        .select('sfp_balance')
+        .select('available_balance')
         .eq('user_id', user.id)
         .single();
 
       if (data) {
-        setSfpBalance(data.sfp_balance);
+        setSfpBalance(data.available_balance);
       }
     };
 
     fetchBalance();
 
-    // 2. Subscribe to real-time wallet updates
     const channel = supabase
       .channel('wallet_changes')
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'wallet_accounts' },
         (payload) => {
-          if (payload.new && typeof payload.new.sfp_balance === 'number') {
-            setSfpBalance(payload.new.sfp_balance);
+          if (payload.new && typeof payload.new.available_balance === 'number') {
+            setSfpBalance(payload.new.available_balance);
           }
         }
       )
@@ -70,6 +69,7 @@ export function Navbar() {
     { name: 'StatusCrash', href: '/games/statuscrash', icon: Zap },
     { name: 'StatusWheel', href: '/games/statuswheel', icon: RotateCw },
     { name: 'StatusCards', href: '/games/statuscards', icon: Sparkles },
+    { name: 'StatusFootball', href: '/games/statusfootball', icon: Swords },
   ];
 
   return (
