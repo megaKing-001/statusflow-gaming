@@ -1,6 +1,6 @@
 // app/page.tsx
 import Link from 'next/link';
-import { HelpCircle, Zap, RotateCw, Gift, ShoppingBag, ShieldCheck, Trophy, Sparkles, ArrowRight } from 'lucide-react';
+import { HelpCircle, Zap, RotateCw, Gift, ShoppingBag, ShieldCheck, Trophy, Sparkles, ArrowRight, Swords } from 'lucide-react';
 
 export const revalidate = 0;
 
@@ -34,13 +34,22 @@ export default function HomePage() {
       href: '/games/statuswheel',
     },
     {
-  slug: 'statuscards',
-  title: 'StatusCards',
-  description: 'Predict whether the next drawn card is higher or lower to win SFP.',
-  icon: Sparkles,
-  color: 'border-emerald-500/30 text-emerald-400',
-  badge: 'Card Draw',
-  href: '/games/statuscards',
+      slug: 'statuscards',
+      title: 'StatusCards',
+      description: 'Predict whether the next drawn card is higher or lower to win SFP.',
+      icon: Sparkles,
+      color: 'border-emerald-500/30 text-emerald-400',
+      badge: 'Card Draw',
+      href: '/games/statuscards',
+    },
+    {
+      slug: 'statusfootball',
+      title: 'StatusFootball',
+      description: 'Stake SFP on penalty shootouts, AI matches, or live PvP wagers.',
+      icon: Swords,
+      color: 'border-rose-500/30 text-rose-400',
+      badge: 'PvP Arena',
+      href: '/games/statusfootball',
     }
   ];
 
